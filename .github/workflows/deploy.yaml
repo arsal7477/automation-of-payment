@@ -1,0 +1,76 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Deploy EC2 Instance
+        run: |
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id ami-12345678 \
+            --instance-type t2.micro \
+            --key-name MyKeyPair \
+            --security-group-ids sg-12345678 \
+            --subnet-id subnet-abcdefgh \
+            --associate-public-ip-address \
+            --query "Instances[0].InstanceId" \
+            --output text)
+          
+          echo "EC2 Instance ID: $INSTANCE_ID"
+
+      - name: Deploy Load Balancer
+        run: |
+          VPC_ID="vpc-12345678"
+          SUBNET_1="subnet-abcdefgh"
+          SUBNET_2="subnet-ijklmnop"
+          SECURITY_GROUP="sg-12345678"
+          LB_NAME="MyLB"
+          TG_NAME="MyTG"
+
+          TARGET_GROUP_ARN=$(aws elbv2 create-target-group \
+            --name $TG_NAME \
+            --protocol HTTP \
+            --port 80 \
+            --vpc-id $VPC_ID \
+            --query "TargetGroups[0].TargetGroupArn" \
+            --output text)
+
+          aws elbv2 register-targets --target-group-arn $TARGET_GROUP_ARN --targets Id=$INSTANCE_ID
+
+          LB_ARN=$(aws elbv2 create-load-balancer \
+            --name $LB_NAME \
+            --subnets $SUBNET_1 $SUBNET_2 \
+            --security-groups $SECURITY_GROUP \
+            --scheme internet-facing \
+            --type application \
+            --query "LoadBalancers[0].LoadBalancerArn" \
+            --output text)
+
+          aws elbv2 create-listener \
+            --load-balancer-arn $LB_ARN \
+            --protocol HTTP \
+            --port 80 \
+            --default-actions Type=forward,TargetGroupArn=$TARGET_GROUP_ARN
+
+          LB_DNS=$(aws elbv2 describe-load-balancers \
+            --load-balancer-arns $LB_ARN \
+            --query "LoadBalancers[0].DNSName" \
+            --output text)
+
+          echo "Load Balancer DNS: $LB_DNS"
